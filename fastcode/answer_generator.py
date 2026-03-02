@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional, Tuple, Callable
 import os
 from openai import OpenAI
 from anthropic import Anthropic
+from anthropic._base_client import DEFAULT_MAX_RETRIES, AsyncAPIClient
+import httpx
 from dotenv import load_dotenv
 
 from .llm_utils import openai_chat_completion
@@ -57,13 +59,35 @@ class AnswerGenerator:
             if not api_key:
                 self.logger.warning("OPENAI_API_KEY not set")
             return OpenAI(api_key=api_key, base_url=self.base_url)
-        
+
         elif self.provider == "anthropic":
             api_key = self.anthropic_api_key
             if not api_key:
                 self.logger.warning("ANTHROPIC_API_KEY not set")
-            return Anthropic(api_key=api_key, base_url=self.base_url)
-        
+
+            # Check if using MiniMax compatible API
+            if self.base_url and "minimax" in self.base_url.lower():
+                # MiniMax uses Bearer token in Authorization header
+                # Try different auth header combinations
+                custom_headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01"
+                }
+                http_client = httpx.Client(headers=custom_headers, timeout=120.0)
+                # Store reference to prevent garbage collection
+                self._http_client = http_client
+                return Anthropic(
+                    api_key=api_key,
+                    base_url=self.base_url,
+                    http_client=http_client,
+                    max_retries=2,
+                    timeout=120.0
+                )
+            else:
+                # Standard Anthropic API
+                return Anthropic(api_key=api_key, base_url=self.base_url)
+
         else:
             self.logger.warning(f"Unknown provider: {self.provider}")
             return None
